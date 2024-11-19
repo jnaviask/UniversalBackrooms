@@ -18,6 +18,16 @@ MODEL_INFO = {
         "display_name": "Claude",
         "company": "anthropic",
     },
+    "sonnet1022": {
+        "api_name": "claude-3-5-sonnet-20241022",
+        "display_name": "Claude",
+        "company": "anthropic",
+    },
+    "haiku": {
+        "api_name": "claude-3-5-haiku-20241022",
+        "display_name": "Claude",
+        "company": "anthropic",
+    },
     "opus": {
         "api_name": "claude-3-opus-20240229",
         "display_name": "Claude",
@@ -30,6 +40,16 @@ MODEL_INFO = {
     },
     "o1-preview": {"api_name": "o1-preview", "display_name": "O1", "company": "openai"},
     "o1-mini": {"api_name": "o1-mini", "display_name": "Mini", "company": "openai"},
+    "405b-instruct": {
+        "api_name": "meta-llama/Meta-Llama-3.1-405B-Instruct",
+        "display_name": "I-405",
+        "company": "hyperbolic",
+    },
+    "405b-base": {
+        "api_name": "meta-llama/Meta-Llama-3.1-405B",
+        "display_name": "B-405",
+        "company": "hyperbolic_completion",
+    },
 }
 
 
@@ -65,6 +85,73 @@ def gpt4_conversation(actor, model, context, system_prompt=None):
 
     response = openai_client.chat.completions.create(**kwargs)
     return response.choices[0].message.content
+
+
+def hyperbolic_conversation(actor, model, context, system_prompt=None):
+    messages = [{"role": m["role"], "content": m["content"]} for m in context]
+    
+    # Add system prompt to the first user message if it exists
+    if system_prompt:
+        for message in messages:
+            if message["role"] == "user":
+                message["content"] = f"<SYSTEM>{system_prompt}</SYSTEM>\n\n{message['content']}"
+                break
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('HYPERBOLIC_API_KEY')}",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 1.0,
+        "max_tokens": 1024,
+    }
+
+    response = requests.post(
+        "https://api.hyperbolic.xyz/v1/chat/completions",
+        json=payload,
+        headers=headers,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def hyperbolic_completion_conversation(actor, model, context, system_prompt=None):
+    messages = [{"role": m["role"], "content": m["content"]} for m in context]
+    
+    # Format messages into a chat-like completion prompt
+    prompt = ""
+    if system_prompt:
+        prompt += f"System: {system_prompt}\n\n"
+    
+    for message in messages:
+        role = "AI1" if message["role"] == "assistant" else "AI2"
+        prompt += f"{role}: {message['content']}\n\n"
+    
+    prompt += "AI1:"
+
+    headers = {
+        "Authorization": f"Bearer {os.getenv('HYPERBOLIC_API_KEY')}",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "temperature": 1.0,
+        "max_tokens": 1024,
+        "stop": ["AI2:", "System:"],  # Stop at next turn
+    }
+
+    response = requests.post(
+        "https://api.hyperbolic.xyz/v1/completions",
+        json=payload,
+        headers=headers,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["text"].strip()
 
 
 def load_template(template_name, models):
@@ -144,7 +231,7 @@ def main():
     )
     parser.add_argument(
         "--lm",
-        choices=["sonnet", "opus", "gpt4o", "o1-preview", "o1-mini", "cli"],
+        choices=list(MODEL_INFO.keys()),
         nargs="+",
         default=["opus", "opus"],
         help="Choose the models for LMs or 'cli' for the world interface (default: opus opus)",
@@ -264,6 +351,14 @@ def main():
 def generate_model_response(model, actor, context, system_prompt):
     if model.startswith("claude-"):
         return claude_conversation(
+            actor, model, context, system_prompt if system_prompt else None
+        )
+    elif model.startswith("meta-llama/Meta-Llama-3.1-405B-Instruct"):
+        return hyperbolic_conversation(
+            actor, model, context, system_prompt if system_prompt else None
+        )
+    elif model.startswith("meta-llama/Meta-Llama-3.1-405B"):
+        return hyperbolic_completion_conversation(
             actor, model, context, system_prompt if system_prompt else None
         )
     else:
