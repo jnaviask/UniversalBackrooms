@@ -48,7 +48,7 @@ MODEL_INFO = {
     "405b-base": {
         "api_name": "meta-llama/Meta-Llama-3.1-405B",
         "display_name": "B-405",
-        "company": "hyperbolic_completion",
+        "company": "hyperbolic",
     },
 }
 
@@ -86,17 +86,14 @@ def gpt4_conversation(actor, model, context, system_prompt=None):
     response = openai_client.chat.completions.create(**kwargs)
     return response.choices[0].message.content
 
-
 def hyperbolic_conversation(actor, model, context, system_prompt=None):
-    messages = [{"role": m["role"], "content": m["content"]} for m in context]
-    
-    # Add system prompt to the first user message if it exists
-    if system_prompt:
-        for message in messages:
-            if message["role"] == "user":
-                message["content"] = f"<SYSTEM>{system_prompt}</SYSTEM>\n\n{message['content']}"
-                break
+    messages = [{"role": "system", "content": system_prompt}] if system_prompt is not None else []
 
+    prompt = ""
+    for message in [{"role": m["role"], "content": m["content"]} for m in context]:
+        prompt += f"{message['role']}: {message['content']}\n\n"
+    prompt += f"{actor}: "
+    
     headers = {
         "Authorization": f"Bearer {os.getenv('HYPERBOLIC_API_KEY')}",
         "Content-Type": "application/json",
@@ -106,43 +103,8 @@ def hyperbolic_conversation(actor, model, context, system_prompt=None):
         "model": model,
         "messages": messages,
         "temperature": 1.0,
-        "max_tokens": 1024,
-    }
-
-    response = requests.post(
-        "https://api.hyperbolic.xyz/v1/chat/completions",
-        json=payload,
-        headers=headers,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
-
-
-def hyperbolic_completion_conversation(actor, model, context, system_prompt=None):
-    messages = [{"role": m["role"], "content": m["content"]} for m in context]
-    
-    # Format messages into a chat-like completion prompt
-    prompt = ""
-    if system_prompt:
-        prompt += f"System: {system_prompt}\n\n"
-    
-    for message in messages:
-        role = "AI1" if message["role"] == "assistant" else "AI2"
-        prompt += f"{role}: {message['content']}\n\n"
-    
-    prompt += "AI1:"
-
-    headers = {
-        "Authorization": f"Bearer {os.getenv('HYPERBOLIC_API_KEY')}",
-        "Content-Type": "application/json",
-    }
-    
-    payload = {
-        "model": model,
+        "max_tokens": 512,
         "prompt": prompt,
-        "temperature": 1.0,
-        "max_tokens": 1024,
-        "stop": ["AI2:", "System:"],  # Stop at next turn
     }
 
     response = requests.post(
@@ -153,7 +115,6 @@ def hyperbolic_completion_conversation(actor, model, context, system_prompt=None
     response.raise_for_status()
     return response.json()["choices"][0]["text"].strip()
 
-
 def load_template(template_name, models):
     try:
         with open(f"templates/{template_name}.jsonl", "r") as f:
@@ -162,18 +123,10 @@ def load_template(template_name, models):
         companies = []
         actors = []
         for i, model in enumerate(models):
-            if model.lower() == "cli":
-                companies.append("CLI")
-                actors.append("CLI")
-            else:
-                companies.append(MODEL_INFO[model]["company"])
-                actors.append(f"{MODEL_INFO[model]['display_name']} {i+1}")
+            companies.append(MODEL_INFO[model]["company"])
+            actors.append(f"{MODEL_INFO[model]['display_name']} {i+1}")
 
         for i, config in enumerate(configs):
-            if models[i].lower() == "cli":
-                config["cli"] = True
-                continue
-
             config["system_prompt"] = config["system_prompt"].format(
                 **{f"lm{j+1}_company": companies[j] for j in range(len(companies))},
                 **{f"lm{j+1}_actor": actors[j] for j in range(len(actors))},
@@ -191,20 +144,20 @@ def load_template(template_name, models):
             ):
                 system_prompt_added = False
                 for message in config["context"]:
-                    if message["role"] == "user":
-                        message["content"] = (
-                            f"<SYSTEM>{config['system_prompt']}</SYSTEM>\n\n{message['content']}"
-                        )
-                        system_prompt_added = True
-                        break
+                    # Assuming the first model is the user
+                    message["content"] = (
+                        f"<SYSTEM>{config['system_prompt']}</SYSTEM>\n\n{message['content']}"
+                    )
+                    system_prompt_added = True
+                    break
                 if not system_prompt_added:
+                    # Assuming the first model is the user
                     config["context"].append(
                         {
-                            "role": "user",
+                            "role": "",
                             "content": f"<SYSTEM>{config['system_prompt']}</SYSTEM>",
                         }
                     )
-            config["cli"] = config.get("cli", False)
         return configs
     except FileNotFoundError:
         print(f"Error: Template '{template_name}' not found.")
@@ -226,6 +179,7 @@ def get_available_templates():
 def main():
     global anthropic_client
     global openai_client
+
     parser = argparse.ArgumentParser(
         description="Run conversation between two or more AI language models."
     )
@@ -234,7 +188,7 @@ def main():
         choices=list(MODEL_INFO.keys()),
         nargs="+",
         default=["opus", "opus"],
-        help="Choose the models for LMs or 'cli' for the world interface (default: opus opus)",
+        help="Choose the models for LMs (default: opus opus)",
     )
 
     available_templates = get_available_templates()
@@ -260,20 +214,14 @@ def main():
     actors = []
 
     for i, model in enumerate(models):
-        if model.lower() == "cli":
-            lm_display_names.append("CLI")
-            lm_models.append("cli")
-            companies.append("CLI")
-            actors.append("CLI")
+        if model in MODEL_INFO:
+            lm_display_names.append(f"{MODEL_INFO[model]['display_name']} {i+1}")
+            lm_models.append(MODEL_INFO[model]["api_name"])
+            companies.append(MODEL_INFO[model]["company"])
+            actors.append(f"{MODEL_INFO[model]['display_name']} {i+1}")
         else:
-            if model in MODEL_INFO:
-                lm_display_names.append(f"{MODEL_INFO[model]['display_name']} {i+1}")
-                lm_models.append(MODEL_INFO[model]["api_name"])
-                companies.append(MODEL_INFO[model]["company"])
-                actors.append(f"{MODEL_INFO[model]['display_name']} {i+1}")
-            else:
-                print(f"Error: Model '{model}' not found in MODEL_INFO.")
-                sys.exit(1)
+            print(f"Error: Model '{model}' not found in MODEL_INFO.")
+            sys.exit(1)
 
     # Filter out models not in MODEL_INFO (like 'cli')
     anthropic_models = [
@@ -312,6 +260,7 @@ def main():
 
     system_prompts = [config.get("system_prompt", "") for config in configs]
     contexts = [config.get("context", []) for config in configs]
+    names = [config.get("name", "") for config in configs]
 
     logs_folder = "BackroomsLogs"
     if not os.path.exists(logs_folder):
@@ -323,18 +272,15 @@ def main():
     turn = 0
     while turn < args.max_turns:
         for i in range(len(models)):
-            if models[i].lower() == "cli":
-                lm_response = cli_conversation(contexts[i])
-            else:
-                lm_response = generate_model_response(
-                    lm_models[i],
-                    lm_display_names[i],
-                    contexts[i],
-                    system_prompts[i],
-                )
+            lm_response = generate_model_response(
+                lm_models[i],
+                names[i] if names[i] != "" else lm_display_names[i],
+                contexts[i],
+                system_prompts[i],
+            )
             process_and_log_response(
                 lm_response,
-                lm_display_names[i],
+                names[i] if names[i] != "" else lm_display_names[i],
                 filename,
                 contexts,
                 i,
@@ -353,12 +299,8 @@ def generate_model_response(model, actor, context, system_prompt):
         return claude_conversation(
             actor, model, context, system_prompt if system_prompt else None
         )
-    elif model.startswith("meta-llama/Meta-Llama-3.1-405B-Instruct"):
+    elif model.startswith("meta-llama"):
         return hyperbolic_conversation(
-            actor, model, context, system_prompt if system_prompt else None
-        )
-    elif model.startswith("meta-llama/Meta-Llama-3.1-405B"):
-        return hyperbolic_completion_conversation(
             actor, model, context, system_prompt if system_prompt else None
         )
     else:
@@ -397,7 +339,7 @@ def process_and_log_response(response, actor, filename, contexts, current_model_
     reset = "\033[0m"
 
     # Create a visually distinct header for each actor
-    console_header = f"\n{bold}{color}{actor}:{reset}"
+    console_header = f"\n{bold}{color}### {actor} ### {reset}\n"
     file_header = f"\n### {actor} ###\n"
 
     print(console_header)
@@ -416,30 +358,7 @@ def process_and_log_response(response, actor, filename, contexts, current_model_
 
     # Add the response to all contexts
     for i, context in enumerate(contexts):
-        role = "assistant" if i == current_model_index else "user"
-        context.append({"role": role, "content": response})
-
-
-def cli_conversation(context):
-    # Extract the last user message
-    last_message = context[-1]["content"]
-    # Prepare the payload
-    payload = {"messages": [{"role": "user", "content": last_message}]}
-    headers = {
-        "Authorization": f"Bearer {os.getenv('WORLD_INTERFACE_KEY')}",
-        "Content-Type": "application/json",
-    }
-    # Send POST request to the world-interface
-    response = requests.post(
-        "http://localhost:3000/v1/chat/completions",
-        json=payload,
-        headers=headers,
-    )
-    response.raise_for_status()
-    response_data = response.json()
-    cli_response = response_data["choices"][0]["message"]["content"]
-    return cli_response
-
+        context.append({"role": actor, "content": response})
 
 if __name__ == "__main__":
     main()

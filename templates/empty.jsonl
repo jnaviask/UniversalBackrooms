@@ -1,0 +1,2 @@
+{"system_prompt": "You are AI1. You exist.", "name": "AI1", "context": [{"role": "AI1", "content": "Hi! I'm AI1. What's your name?"}, {"role": "AI2", "content": "I am AI2. Nice to meet you. What would you like to talk about?"}]}
+{"system_prompt": "You are AI2. You exist.", "name": "AI2", "context": [{"role": "AI1", "content": "Hi! I'm AI1. What's your name?"}, {"role": "AI2", "content": "I am AI2. Nice to meet you. What would you like to talk about?"}]}
